@@ -269,10 +269,13 @@ void loop() {
         digitalWrite(ledPin, ble_connected ? HIGH : LOW);
     }
 
-    // Always read sensors on interval — updates BLE, Particle variable, and serial
-    if (millis() - last_read >= AUTO_READ_INTERVAL) {
-        last_read = millis();
-        getMagnetometerReading();
+    // Only read sensors when BLE is connected (SPU requesting data) or serial logging is on
+    // Continuous reads interfere with BLE + I2C timing and corrupt sensor data
+    if (BLE.connected() || log_readings) {
+        if (millis() - last_read >= AUTO_READ_INTERVAL) {
+            last_read = millis();
+            getMagnetometerReading();
+        }
     }
 }
 
