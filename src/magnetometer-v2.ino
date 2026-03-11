@@ -176,16 +176,25 @@ void bleReadOneWell(int well) {
 }
 
 void getMagnetometerReading() {
-    // Build TSV header for Particle variable
+    // Build TSV for Particle variable (unchanged — BIMS reads this)
     int offset = snprintf(mag_data, sizeof(mag_data),
         "\t Channel A\t\t\t Channel B\t\t\t Channel C\r\n"
         "Well\t T\t X\t Y\t  Z\t T\t X\t Y\t  Z\t T\t X\t Y\t  Z\r\n");
 
+    // Serial output — formatted table for USB serial monitor
+    Serial.println();
+    if (Time.isValid()) {
+        Serial.printlnf("=== Magnetometer @ %s ===", Time.format(Time.now(), "%H:%M:%S").c_str());
+    } else {
+        Serial.printlnf("=== Magnetometer @ %lu ms ===", millis());
+    }
+    Serial.println("        ----- Sample (A) -----   ---- Ctrl Low (B) ----   --- Ctrl High (C) ---");
+    Serial.println("Well    T      X      Y      Z     T      X      Y      Z     T      X      Y      Z");
+
     for(int i = 0; i < 5; i++) {
-        // bleReadOneWell reads sensors and sets BLE characteristic + populates sample/controlLow/controlHigh
         bleReadOneWell(i);
 
-        // Append to Particle variable buffer (uses sample/controlLow/controlHigh from bleReadOneWell)
+        // Particle variable (TSV format for cloud/BIMS)
         offset += snprintf(mag_data + offset, sizeof(mag_data) - offset,
             "%d\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\r\n",
             i + 1,
@@ -193,14 +202,13 @@ void getMagnetometerReading() {
             controlLow.temperature, controlLow.mx, controlLow.my, controlLow.mz,
             controlHigh.temperature, controlHigh.mx, controlHigh.my, controlHigh.mz);
 
-        // Serial output
-        Serial.printlnf("Well %d: T=%.1f X=%.1f Y=%.1f Z=%.1f | T=%.1f X=%.1f Y=%.1f Z=%.1f | T=%.1f X=%.1f Y=%.1f Z=%.1f",
+        // Serial output — aligned columns for each well
+        Serial.printlnf("  %d  %5.1f %6.1f %6.1f %6.1f  %5.1f %6.1f %6.1f %6.1f  %5.1f %6.1f %6.1f %6.1f",
             i + 1,
             sample.temperature, sample.mx, sample.my, sample.mz,
             controlLow.temperature, controlLow.mx, controlLow.my, controlLow.mz,
             controlHigh.temperature, controlHigh.mx, controlHigh.my, controlHigh.mz);
     }
-    Serial.println("---");
 
     // Blink the LED
     ledState = !ledState;
