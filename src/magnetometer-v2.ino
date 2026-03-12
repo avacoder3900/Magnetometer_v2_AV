@@ -11,9 +11,8 @@
 #include <Wire.h>
 #include <math.h>
 
-SYSTEM_MODE(SEMI_AUTOMATIC);  // Connect to cloud but don't block boot
 SYSTEM_THREAD(ENABLED);
-PRODUCT_VERSION(5);
+PRODUCT_VERSION(4);
 
 // Return values of endTransmission in the Wire library
 #define kNOERROR 0
@@ -53,12 +52,8 @@ bool qualified = false;
 LEDStatus blinkRed(RGB_COLOR_RED, LED_PATTERN_BLINK, LED_SPEED_NORMAL, LED_PRIORITY_IMPORTANT);
 
 char result[100];
-char mag_data[800];  // Particle variable: all 5 wells TSV
 
 unsigned long read_time = 0;
-unsigned long last_read = 0;
-#define AUTO_READ_INTERVAL 2000  // Read sensors every 2 seconds
-
 bool log_readings = false;
 bool ble_connected = false;
 
@@ -144,20 +139,13 @@ void setup() {
 
     initialize_BLE();
 
-    // Register Particle cloud variable
-    Particle.variable("mag_data", mag_data);
-    memset(mag_data, 0, sizeof(mag_data));
-
-    // Connect to Particle cloud (non-blocking due to SEMI_AUTOMATIC + SYSTEM_THREAD)
-    Particle.connect();
-
     qualified = ((char) EEPROM.read(0)) == 'Y';
-    if (!qualified) {
-        Log.info("Magnetometer not qualified — BLE will still advertise");
+    if (qualified) {
+        startAdvertising();
+    } else {
+        Log.info("Magnetometer not qualified!");
         blinkRed.setActive(true);
     }
-    // Always advertise BLE
-    startAdvertising();
 }
 
 void readALS31300ADC(int busAddress, MagnetometerReading &reading);
@@ -176,40 +164,20 @@ void bleReadOneWell(int well) {
 }
 
 void getMagnetometerReading() {
-    // Build TSV for Particle variable (unchanged — BIMS reads this)
-    int offset = snprintf(mag_data, sizeof(mag_data),
-        "\t Channel A\t\t\t Channel B\t\t\t Channel C\r\n"
-        "Well\t T\t X\t Y\t  Z\t T\t X\t Y\t  Z\t T\t X\t Y\t  Z\r\n");
-
-    // Serial output — formatted table for USB serial monitor
     Serial.println();
-    if (Time.isValid()) {
-        Serial.printlnf("=== Magnetometer @ %s ===", Time.format(Time.now(), "%H:%M:%S").c_str());
-    } else {
-        Serial.printlnf("=== Magnetometer @ %lu ms ===", millis());
-    }
     Serial.println("        ----- Sample (A) -----   ---- Ctrl Low (B) ----   --- Ctrl High (C) ---");
     Serial.println("Well    T      X      Y      Z     T      X      Y      Z     T      X      Y      Z");
 
     for(int i = 0; i < 5; i++) {
         bleReadOneWell(i);
 
-        // Particle variable (TSV format for cloud/BIMS)
-        offset += snprintf(mag_data + offset, sizeof(mag_data) - offset,
-            "%d\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\r\n",
-            i + 1,
-            sample.temperature, sample.mx, sample.my, sample.mz,
-            controlLow.temperature, controlLow.mx, controlLow.my, controlLow.mz,
-            controlHigh.temperature, controlHigh.mx, controlHigh.my, controlHigh.mz);
-
-        // Serial output — aligned columns for each well
         Serial.printlnf("  %d  %5.1f %6.1f %6.1f %6.1f  %5.1f %6.1f %6.1f %6.1f  %5.1f %6.1f %6.1f %6.1f",
             i + 1,
             sample.temperature, sample.mx, sample.my, sample.mz,
             controlLow.temperature, controlLow.mx, controlLow.my, controlLow.mz,
             controlHigh.temperature, controlHigh.mx, controlHigh.my, controlHigh.mz);
     }
-
+    if (log_readings) Log.info("-------------------------");
     // Blink the LED
     ledState = !ledState;
     digitalWrite(ledPin, ledState);
@@ -243,12 +211,19 @@ void qualify_magnetometer() {
     Serial.printlnf("ID: %s, Date: %s, Result: %s", System.deviceID().c_str(), Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL).c_str(), isOK ? "QUALIFIED" : "UNACCEPTABLE");
     EEPROM.put(0, isOK ? 'Y' : 'N');
 
-    // Never stop BLE — qualification is informational only
-    blinkRed.setActive(!isOK);
-    qualified = isOK;
-    if (!BLE.advertising()) {
+    if (!isOK) {
+        if (BLE.advertising()) {
+            BLE.stopAdvertising();
+        }
+        if (ble_connected || BLE.connected()) {
+            BLE.disconnect();
+            ble_connected = false;
+        }
+    } else if (!BLE.advertising()) {
         startAdvertising();
     }
+    blinkRed.setActive(!isOK);
+    qualified = isOK;
 }
 
 void loop() {
@@ -262,18 +237,14 @@ void loop() {
         while (Serial.available()) Serial.read();
     }
 
-    // Track BLE connection state
-    if (BLE.connected() ^ ble_connected) {
-        ble_connected = BLE.connected();
-        Log.info("Bluetooth %sconnected", ble_connected ? "" : "dis");
-        digitalWrite(ledPin, ble_connected ? HIGH : LOW);
-    }
+    if (qualified) {
+        if (BLE.connected() ^ ble_connected) {
+            ble_connected = BLE.connected();
+            Log.info("Bluetooth %sconnected", ble_connected ? "" : "dis");
+            digitalWrite(ledPin, LOW);
+        }
 
-    // Only read sensors when BLE is connected (SPU requesting data) or serial logging is on
-    // Continuous reads interfere with BLE + I2C timing and corrupt sensor data
-    if (BLE.connected() || log_readings) {
-        if (millis() - last_read >= AUTO_READ_INTERVAL) {
-            last_read = millis();
+        if (BLE.connected() || log_readings) {
             getMagnetometerReading();
         }
     }
